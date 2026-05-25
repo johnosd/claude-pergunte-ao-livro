@@ -3,13 +3,13 @@ import chromadb
 from dotenv import load_dotenv
 from src.parser import parse_epub
 from src.chunker import chunk_chapters
+from src.enricher import enrich_chunks
 from src.embedder import embed_chunks
 from src.store import store_chunks
 
 load_dotenv()
 
 def reset_chroma(persist_dir: str = "data/chroma"):
-    # Apaga a coleção se existir, para evitar IDs duplicados
     client = chromadb.PersistentClient(path=persist_dir)
     try:
         client.delete_collection("book_chunks")
@@ -17,7 +17,7 @@ def reset_chroma(persist_dir: str = "data/chroma"):
         pass
     print("  Chroma resetado.")
 
-def ingest_book(file_path: str, reset: bool = False):
+def ingest_book(file_path: str, reset: bool = False, enrich: bool = False, provider: str = "anthropic", threads: int = 5):
     if reset:
         print("Resetando Chroma...")
         reset_chroma()
@@ -30,6 +30,11 @@ def ingest_book(file_path: str, reset: bool = False):
     chunks = chunk_chapters(chapters)
     print(f"  {len(chunks)} chunks gerados")
 
+    if enrich:
+        print(f"Enriquecendo chunks com contexto (provider: {provider}, threads: {threads})...")
+        chunks = enrich_chunks(chunks, chapters, provider=provider, threads=threads)
+        print(f"  {len(chunks)} chunks enriquecidos")
+
     print("Gerando embeddings (pode demorar)...")
     embedded_chunks = embed_chunks(chunks)
     print(f"  {len(embedded_chunks)} embeddings gerados")
@@ -40,9 +45,12 @@ def ingest_book(file_path: str, reset: bool = False):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python scripts/ingest.py <caminho-do-epub> [--reset]")
+        print("Uso: python -m scripts.ingest <epub> [--reset] [--enrich] [--provider=anthropic|openai|gemini|deepseek|qwen] [--threads=5]")
         sys.exit(1)
     reset = "--reset" in sys.argv
-    ingest_book(sys.argv[1], reset=reset)
+    enrich = "--enrich" in sys.argv
+    provider = next((a.split("=")[1] for a in sys.argv if a.startswith("--provider=")), "anthropic")
+    threads = int(next((a.split("=")[1] for a in sys.argv if a.startswith("--threads=")), 5))
+    ingest_book(sys.argv[1], reset=reset, enrich=enrich, provider=provider, threads=threads)
 
 

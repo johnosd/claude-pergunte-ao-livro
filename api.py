@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from src.parser import parse_epub
 from src.chunker import chunk_chapters
 from src.embedder import embed_chunks
+from src.enricher import enrich_chunks
 from src.store_firestore import store_chunks_firestore, delete_collection_firestore
 from src.retriever_firestore import retrieve_hybrid_firestore, rerank
 from src.answer import answer
@@ -16,7 +17,7 @@ load_dotenv()
 app = FastAPI(title="Pergunte ao Livro API")
 
 @app.post("/ingest")
-async def ingest(file: UploadFile = File(...)):
+async def ingest(file: UploadFile = File(...), enrich: bool = False):
     # Valida que é um EPUB
     if not file.filename.endswith(".epub"):
         raise HTTPException(status_code=400, detail="Arquivo deve ser um .epub")
@@ -31,6 +32,8 @@ async def ingest(file: UploadFile = File(...)):
 
         chapters = parse_epub(tmp_path)
         chunks = chunk_chapters(chapters)
+        if enrich:
+            chunks = enrich_chunks(chunks, chapters)
         embedded_chunks = embed_chunks(chunks)
         store_chunks_firestore(embedded_chunks)
     finally:
