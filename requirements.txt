@@ -1,0 +1,10 @@
+anthropic==0.84.0
+python-dotenv
+ipykernel
+jupyter
+voyageai
+pytest
+ebooklib
+beautifulsoup4
+chromadb
+tiktoken
