@@ -1,3 +1,4 @@
+import time
 import voyageai
 from dotenv import load_dotenv
 
@@ -20,5 +21,10 @@ def embed_chunks(chunks: list[dict], batch_size: int = 128) -> list[dict]:
         # Injeta o embedding de volta no chunk original (pelo índice)
         for j, embedding in enumerate(result.embeddings):
             chunks[i + j]["embedding"] = embedding
+
+        # Aguarda para respeitar o rate limit do plano gratuito (3 RPM)
+        if i + batch_size < len(texts):
+            print(f"  Batch {i // batch_size + 1} concluído. Aguardando 20s...")
+            time.sleep(20)
 
     return chunks

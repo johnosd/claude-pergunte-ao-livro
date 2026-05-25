@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "mcp__plugin_context7_context7__resolve-library-id",
-      "mcp__plugin_context7_context7__query-docs"
+      "mcp__plugin_context7_context7__query-docs",
+      "Read(//c/Users/johns/.claude/projects/c--Users-johns-Documents-Projetos-Claude-Code-Pratice-claude-certified-claude-pergunte-ao-livro/memory/**)",
+      "Bash(venv\\\\Scripts\\\\pip install *)",
+      "Bash(venv\\\\Scripts\\\\python -c \"from rank_bm25 import BM25Okapi; print\\('ok'\\)\")",
+      "Bash(.\\\\venv\\\\Scripts\\\\python.exe -c \"from rank_bm25 import BM25Okapi; print\\('instalado com sucesso'\\)\")"
     ]
   }
 }

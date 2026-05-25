@@ -8,3 +8,7 @@ ebooklib
 beautifulsoup4
 chromadb
 tiktoken
+rank_bm25
+fastapi
+uvicorn
+google-cloud-firestore>=2.14.0
