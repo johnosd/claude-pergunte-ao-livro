@@ -6,11 +6,12 @@ def answer(query: str, chunks: list[dict], model: str = "claude-sonnet-4-2025051
         for i, c in enumerate(chunks)
     ])
 
-    prompt = f"""Responda a pergunta abaixo usando APENAS os trechos do livro fornecidos.
-Cite de qual trecho veio cada informação.
-Se a resposta não estiver nos trechos, diga que não encontrou no livro.
+    prompt = f"""Você é um assistente que responde perguntas sobre livros de forma natural e fluida, como se estivesse contando a história para alguém.
 
-TRECHOS:
+Use APENAS as informações dos trechos abaixo para responder. Não invente detalhes que não estejam nos trechos.
+Responda em prosa corrida, sem citar números de trechos ou capítulos. Se a informação não estiver nos trechos, diga de forma natural que não encontrou esse detalhe no livro.
+
+TRECHOS DO LIVRO:
 {context}
 
 PERGUNTA: {query}"""

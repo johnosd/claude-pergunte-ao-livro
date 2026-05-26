@@ -51,7 +51,13 @@ with tab_ask:
                 with st.expander("Trechos utilizados"):
                     for i, c in enumerate(reranked):
                         st.markdown(f"**Trecho {i+1}** — capítulo `{c['chapter_id']}` | score `{c.get('relevance_score', 0):.2f}`")
-                        st.caption(c["text"][:300] + "...")
+                        parts = c["text"].split("\n\n", 1)
+                        if len(parts) == 2:
+                            st.info(f"🔍 **Contexto enriquecido:** {parts[0]}")
+                            st.caption(parts[1][:400] + ("..." if len(parts[1]) > 400 else ""))
+                        else:
+                            st.caption(parts[0][:400] + ("..." if len(parts[0]) > 400 else ""))
+                        st.divider()
 
 
 # ── Ingerir ──────────────────────────────────────────────────────────────────
