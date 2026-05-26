@@ -12,7 +12,11 @@ def store_chunks(chunks: list[dict], persist_dir: str = "data/chroma"):
         ids=[chunk["id"] for chunk in chunks],
         embeddings=[chunk["embedding"] for chunk in chunks],
         documents=[chunk["text"] for chunk in chunks],
-        metadatas=[{"chapter_id": chunk["chapter_id"], "book_id": chunk["book_id"]} for chunk in chunks],
+        metadatas=[{
+            "chapter_id": chunk["chapter_id"],
+            "chapter_title": chunk.get("chapter_title", chunk["chapter_id"]),
+            "book_id": chunk["book_id"],
+        } for chunk in chunks],
     )
 
 

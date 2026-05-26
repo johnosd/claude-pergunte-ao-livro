@@ -68,7 +68,7 @@ with tab_ingest:
     st.subheader("Ingerir livro EPUB")
     uploaded = st.file_uploader("Selecione um arquivo EPUB", type=["epub"])
 
-    enrich = st.checkbox("Enriquecimento contextual")
+    enrich = st.checkbox("Enriquecimento contextual", value=True)
     enrich_providers = [p for p, cfg in PROVIDERS.items() if cfg.get("enrich_model")]
     provider = st.selectbox("Provider de enriquecimento", enrich_providers, disabled=not enrich)
 
@@ -91,7 +91,8 @@ with tab_ingest:
 # ── Livros ───────────────────────────────────────────────────────────────────
 
 with tab_books:
-    from src.book_catalog import list_books, book_exists
+    from src.book_catalog import list_books, update_book_metadata
+    from src.metadata_fetcher import fetch_all_metadata, format_metadata_summary
     from scripts.ingest import remove_book
 
     books = list_books()
@@ -102,15 +103,64 @@ with tab_books:
         st.subheader(f"{len(books)} livro(s) ingerido(s)")
         for b in books:
             with st.expander(f"📖 {b['title'] or b['book_id']}"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
+                col_info, col_actions = st.columns([3, 1])
+
+                with col_info:
                     st.markdown(f"**book_id:** `{b['book_id']}`")
                     st.markdown(f"**Autor:** {b['author'] or '—'}")
                     st.markdown(f"**ISBN:** {b['isbn'] or '—'}")
                     st.markdown(f"**Chunks:** {b['chunk_count']} | **Enriquecido:** {'sim' if b['enriched'] else 'não'}")
                     st.caption(f"Ingerido em: {b['ingested_at']}")
-                with col2:
+
+                with col_actions:
+                    if st.button("🔍 Buscar Metadados", key=f"fetch_{b['book_id']}"):
+                        with st.spinner("Consultando APIs..."):
+                            epub_meta = {"id": b["book_id"], "title": b["title"],
+                                         "author": b["author"], "isbn": b["isbn"]}
+                            all_metadata = fetch_all_metadata(epub_meta)
+                            update_book_metadata(b["book_id"], all_metadata)
+                        st.success(format_metadata_summary(all_metadata))
+                        st.rerun()
+
                     if st.button("🗑 Remover", key=f"remove_{b['book_id']}"):
                         remove_book(b["book_id"])
                         st.success(f"'{b['title'] or b['book_id']}' removido.")
                         st.rerun()
+
+                # Metadados das três fontes
+                g  = b.get("metadata_google") or {}
+                ol = b.get("metadata_openlibrary") or {}
+                ep = b.get("metadata_epub") or {}
+
+                has_external = g or ol
+                st.divider()
+                meta_tab_epub, meta_tab_google, meta_tab_ol = st.tabs(["📄 EPUB", "🔵 Google Books", "🟠 Open Library"])
+
+                with meta_tab_epub:
+                    if ep:
+                        for k, v in ep.items():
+                            st.markdown(f"**{k}:** {v}")
+                    else:
+                        st.caption("Sem dados do EPUB.")
+
+                with meta_tab_google:
+                    if g:
+                        for k, v in g.items():
+                            if k == "description":
+                                st.markdown(f"**Descrição:** {v}")
+                            elif isinstance(v, list):
+                                st.markdown(f"**{k}:** {', '.join(str(i) for i in v)}")
+                            else:
+                                st.markdown(f"**{k}:** {v}")
+                    else:
+                        st.caption("Sem dados do Google Books. Clique em 'Buscar Metadados'.")
+
+                with meta_tab_ol:
+                    if ol:
+                        for k, v in ol.items():
+                            if isinstance(v, list):
+                                st.markdown(f"**{k}:** {', '.join(str(i) for i in v)}")
+                            else:
+                                st.markdown(f"**{k}:** {v}")
+                    else:
+                        st.caption("Sem dados do Open Library. Clique em 'Buscar Metadados'.")

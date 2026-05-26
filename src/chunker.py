@@ -16,6 +16,7 @@ def chunk_chapters(chapters: list[dict], book_id: str, chunk_size: int = 500, ov
                 "id": f"{book_id}__{chapter['id']}__chunk_{i}",
                 "text": text,
                 "chapter_id": chapter["id"],
+                "chapter_title": chapter.get("title", chapter["id"]),
                 "book_id": book_id,
             })
     return chunks

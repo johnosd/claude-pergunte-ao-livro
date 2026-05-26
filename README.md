@@ -20,7 +20,21 @@ livro.epub
 Extrai metadados do EPUB (título, autor, ISBN)
 Gera book_id estável: ISBN → slug(title-author)
 Extrai texto limpo de cada capítulo
+Detecta título do capítulo (primeiro h1/h2/h3/h4)
 (filtra CSS, imagens, páginas em branco)
+    │
+    ▼
+[ metadata_fetcher.py ]
+Enriquece os metadados do livro consultando
+duas APIs externas em paralelo:
+  • Google Books API (requer BOOKS_API_KEY)
+  • Open Library API  (gratuita, sem chave)
+Busca por ISBN quando disponível, ou por
+título + autor como fallback.
+As três fontes (epub, google, openlibrary)
+são armazenadas separadamente — nada é perdido.
+Erros de rede são silenciados: o pipeline
+não falha se as APIs estiverem indisponíveis.
     │
     ▼
 [ book_catalog.py ]
@@ -35,10 +49,11 @@ Catálogo cloud: Firestore collection "books"
 Divide cada capítulo em pedaços de 500 chars
 com overlap de 50 chars entre eles
 ID do chunk: {book_id}__{chapter_id}__chunk_{n}
+Propaga chapter_title para cada chunk
 Ex: 8 capítulos → 1746 chunks
     │
     ▼
-[ enricher.py ]  ← opcional (flag --enrich)
+[ enricher.py ]  ← ativo por padrão (desativar com --no-enrich)
 Para cada chunk, envia o capítulo inteiro + chunk
 para um LLM e gera 1-2 frases de contexto.
 O contexto é prefixado ao chunk antes do embedding.
@@ -68,13 +83,15 @@ que representa seu significado semântico
     │
     ▼
 [ store.py / Chroma ]  ou  [ store_firestore.py ]
-Salva: id + embedding + texto + chapter_id + book_id
+Salva: id + embedding + texto + chapter_id + chapter_title + book_id
 Persiste entre sessões — múltiplos livros coexistem
     │
     ▼
 [ book_catalog.py ]
 Registra o livro no catálogo com metadados:
 título, autor, ISBN, chunk_count, enriched, ingested_at
+metadata_epub / metadata_google / metadata_openlibrary
+(armazenados como JSON, deserializados na leitura)
 ```
 
 ### Fluxo de Pergunta (Hybrid Search)
@@ -90,29 +107,32 @@ título, autor, ISBN, chunk_count, enriched, ingested_at
 [ Busca Semântica ]           [ Busca Lexical ]
 Converte a pergunta           Calcula score BM25
 em embedding e busca          por palavras-chave
-os vetores mais próximos      nos chunks do Chroma
-no Chroma / Firestore
+os 50 vetores mais próximos   nos chunks do Chroma
+no Chroma / Firestore         (top-50)
     │                                 │
     └──────────────┬──────────────────┘
                    │
                    ▼
-         [ Combina + Deduplica ]
-         Une os resultados das duas buscas
-         Remove duplicatas (~15-20 chunks únicos)
+         [ RRF — Reciprocal Rank Fusion ]
+         Combina os dois rankings por posição
+         (não por score bruto) → ~100 candidatos
+         ordenados por relevância combinada
                    │
                    ▼
             [ reranker ]
             Voyage AI rerank-2 lê a pergunta
             + cada chunk juntos e calcula
-            relevância real → top-3
+            relevância real → top-6
                    │
                    ▼
              [ answer.py ]
-             Monta prompt com os 3 trechos
-             e envia para o LLM escolhido
+             Monta prompt com os 6 trechos no formato
+             [livro > capítulo] e envia para o LLM.
+             LLM cita fonte e declara insuficiência
+             quando evidência não sustenta a resposta.
                    │
                    ▼
-        Resposta com citações dos trechos
+        Resposta com citações [livro > capítulo]
 ```
 
 ### Por que Hybrid Search?
@@ -141,6 +161,7 @@ Baseado na [pesquisa da Anthropic sobre Contextual Retrieval](https://www.anthro
 | Componente | Tecnologia |
 |---|---|
 | EPUB parsing | `ebooklib` + `beautifulsoup4` |
+| Metadados externos | Google Books API + Open Library API (stdlib `urllib`) |
 | Catálogo de livros | SQLite (local) / Firestore collection `books` (cloud) |
 | Enriquecimento contextual | Multi-provider: Anthropic, DeepSeek, OpenAI, Gemini, Qwen |
 | Embeddings | Voyage AI `voyage-3.5` |
@@ -171,6 +192,7 @@ pergunte-ao-livro/
 │   ├── clients.py                # fonte única de todos os clientes de API
 │   ├── book_catalog.py           # catálogo de livros: SQLite (local) e Firestore (cloud)
 │   ├── parser.py                 # EPUB → metadados + texto limpo por capítulo
+│   ├── metadata_fetcher.py       # Google Books + Open Library → metadados complementares
 │   ├── chunker.py                # texto → chunks com book_id, overlap e metadata
 │   ├── enricher.py               # chunks → chunks enriquecidos (multi-provider, paralelo)
 │   ├── embedder.py               # chunks → embeddings via Voyage AI (batch)
@@ -212,6 +234,9 @@ GEMINI_API_KEY=sua_chave_aqui
 DEEPSEEK_API_KEY=sua_chave_aqui
 QWEN_API_KEY=sua_chave_aqui
 
+# Metadados externos (opcional — Open Library não precisa de chave)
+BOOKS_API_KEY=sua_chave_aqui   # Google Books API
+
 # Só para Firestore
 GOOGLE_APPLICATION_CREDENTIALS=caminho/para/service-account.json
 ```
@@ -249,13 +274,13 @@ Abre em `http://localhost:8501` com três abas:
 **Ingerir livros:**
 
 ```bash
-# Sem enriquecimento (mais rápido)
+# Com enriquecimento contextual (padrão — recomendado)
 python cli.py ingest "data/books/livro-a.epub"
+python cli.py ingest "data/books/livro-a.epub" --provider=deepseek
+python cli.py ingest "data/books/livro-a.epub" --provider=gemini
 
-# Com enriquecimento — DeepSeek V3 é o padrão (melhor custo-benefício)
-python cli.py ingest "data/books/livro-a.epub" --enrich
-python cli.py ingest "data/books/livro-a.epub" --enrich --provider=anthropic
-python cli.py ingest "data/books/livro-a.epub" --enrich --provider=gemini
+# Sem enriquecimento (mais rápido, menor qualidade de retrieval)
+python cli.py ingest "data/books/livro-a.epub" --no-enrich
 ```
 
 > Se tentar ingerir um livro já ingerido, o sistema avisa e para:
@@ -270,6 +295,14 @@ python cli.py ingest "data/books/livro-a.epub" --enrich --provider=gemini
 | `deepseek` | ~$0.02 | ~5 min |
 | `qwen` | ~$0.005 | ~4 min |
 | `openai` | ~$0.04 | ~5 min |
+
+**Buscar metadados externos para um livro já ingerido:**
+
+```bash
+python cli.py fetch-metadata master-of-the-game
+```
+
+Consulta Google Books e Open Library e atualiza as colunas `metadata_google` e `metadata_openlibrary` no catálogo sem reprocessar chunks ou embeddings. Útil para livros ingeridos antes dessa funcionalidade existir.
 
 **Remover um livro:**
 
@@ -396,6 +429,15 @@ Resposta:
 - [x] Filtro por livro em perguntas (`--book` no CLI, `book_id` na API)
 - [x] Interface web com Streamlit (ingerir, perguntar, listar e remover livros)
 - [x] Deploy no Streamlit Community Cloud
+- [x] Enriquecimento de metadados com Google Books API e Open Library API
+- [x] Armazenamento separado das três fontes de metadados (epub, google, openlibrary)
+- [x] Comando `fetch-metadata` para atualizar metadados sem reingerir o livro
+- [x] Extração do título do capítulo (h1/h2/h3) para metadados do chunk
+- [x] RRF (Reciprocal Rank Fusion) substituindo deduplicação simples no hybrid search
+- [x] Candidate pool de 50 candidatos por retriever (era 5–10) para aumentar recall antes do reranker
+- [x] Reranker top-k de 3 → 6 chunks para melhor cobertura de contexto
+- [x] Citação estruturada no prompt: `[livro > capítulo]` com cláusula de abstenção explícita
+- [x] Enriquecimento contextual ativado por padrão (`--no-enrich` para desativar)
 
 ---
 
