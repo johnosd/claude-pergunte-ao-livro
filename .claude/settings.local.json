@@ -8,7 +8,19 @@
       "Bash(venv\\\\Scripts\\\\python -c \"from rank_bm25 import BM25Okapi; print\\('ok'\\)\")",
       "Bash(.\\\\venv\\\\Scripts\\\\python.exe -c \"from rank_bm25 import BM25Okapi; print\\('instalado com sucesso'\\)\")",
       "Bash(dir \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\data\" /s /b)",
-      "PowerShell(& \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\venv\\\\Scripts\\\\pip.exe\" install streamlit)"
+      "PowerShell(& \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\venv\\\\Scripts\\\\pip.exe\" install streamlit)",
+      "Bash(Get-ChildItem \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\training\" -Recurse)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(python -c \"from src.metadata_fetcher import fetch_all_metadata; print\\('import OK'\\)\")",
+      "Bash(python -c \"from src.book_catalog import register_book, list_books; print\\('import OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -u -c ' *)",
+      "Bash(Get-ChildItem \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\src\" -Force)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\" -Exclude venv)",
+      "Bash(Select-Object Name)",
+      "Bash(ls -la \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\\" | grep -v venv)",
+      "Read(//c/Users/johns/Documents/Projetos/Claude Code Pratice/claude_certified/**)"
     ]
   }
 }

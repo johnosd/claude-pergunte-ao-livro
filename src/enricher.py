@@ -45,7 +45,7 @@ def _get_context_openai_compat(client, model: str, chapter_text: str, chunk_text
     )
     return response.choices[0].message.content.strip()
 
-def enrich_chunks(chunks: list[dict], chapters: list[dict], provider: str = "anthropic", threads: int = 5) -> list[dict]:
+def enrich_chunks(chunks: list[dict], chapters: list[dict], provider: str = "anthropic", threads: int = 10) -> list[dict]:
     if provider not in PROVIDERS:
         raise ValueError(f"Provider inválido: {provider}. Opções: {list(PROVIDERS.keys())}")
 

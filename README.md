@@ -45,16 +45,32 @@ Catálogo local: SQLite (data/books.db)
 Catálogo cloud: Firestore collection "books"
     │
     ▼
-[ chunker.py ]
-Divide cada capítulo em pedaços de 500 chars
-com overlap de 50 chars entre eles
-ID do chunk: {book_id}__{chapter_id}__chunk_{n}
-Propaga chapter_title para cada chunk
-Ex: 8 capítulos → 1746 chunks
+[ chunker.py ]  ← estratégia parent-child
+Divide cada capítulo em dois níveis hierárquicos:
+
+  BLOCOS PAI (~1.000 chars, sem overlap)
+  Cada bloco pai cobre um trecho coerente do capítulo.
+  São armazenados no SQLite para recuperação posterior.
+  NÃO são indexados para busca — existem só para fornecer
+  contexto expandido ao LLM na hora de gerar a resposta.
+
+  CHUNKS FILHO (~250 chars, overlap de 25 chars)
+  Cada filho é uma fatia do seu pai.
+  São os únicos indexados (embedding + BM25).
+  Carregam parent_id para que o pai possa ser recuperado.
+
+  Estrutura de IDs:
+  {book_id}__{chapter_id}__parent_{n}
+  {book_id}__{chapter_id}__parent_{n}__child_{m}
+
+  Ex: 8 capítulos → ~140 pais → ~560 filhos
+    │
+    ├── filhos → [ enricher.py / embedder.py / Chroma ]
+    └── pais  → [ store.py / SQLite ]
     │
     ▼
 [ enricher.py ]  ← ativo por padrão (desativar com --no-enrich)
-Para cada chunk, envia o capítulo inteiro + chunk
+Para cada chunk filho, envia o capítulo inteiro + chunk
 para um LLM e gera 1-2 frases de contexto.
 O contexto é prefixado ao chunk antes do embedding.
 
@@ -82,9 +98,13 @@ Cada chunk vira um vetor de números (embedding)
 que representa seu significado semântico
     │
     ▼
-[ store.py / Chroma ]  ou  [ store_firestore.py ]
-Salva: id + embedding + texto + chapter_id + chapter_title + book_id
+[ store.py / Chroma ]  ← chunks filhos indexados
+Salva: id + embedding + texto + chapter_id + chapter_title + parent_id + book_id
 Persiste entre sessões — múltiplos livros coexistem
+
+[ store.py / SQLite — tabela parent_chunks ]  ← blocos pai
+Salva: parent_id + book_id + chapter_id + text (texto completo)
+Sem embedding — consultado por ID na hora da resposta
     │
     ▼
 [ book_catalog.py ]
@@ -94,7 +114,7 @@ metadata_epub / metadata_google / metadata_openlibrary
 (armazenados como JSON, deserializados na leitura)
 ```
 
-### Fluxo de Pergunta (Hybrid Search)
+### Fluxo de Pergunta (Hybrid Search + Parent Expansion)
 
 ```
 "Quem é Kate Blackwell?"  [--book master-of-the-game]
@@ -105,10 +125,9 @@ metadata_epub / metadata_google / metadata_openlibrary
     │                                 │
     ▼                                 ▼
 [ Busca Semântica ]           [ Busca Lexical ]
-Converte a pergunta           Calcula score BM25
-em embedding e busca          por palavras-chave
-os 50 vetores mais próximos   nos chunks do Chroma
-no Chroma / Firestore         (top-50)
+Embedding da pergunta         BM25 por palavras-chave
+busca os 50 chunks filho      nos chunks filho do Chroma
+mais próximos no Chroma       (top-50)
     │                                 │
     └──────────────┬──────────────────┘
                    │
@@ -120,20 +139,67 @@ no Chroma / Firestore         (top-50)
                    │
                    ▼
             [ reranker ]
-            Voyage AI rerank-2 lê a pergunta
-            + cada chunk juntos e calcula
-            relevância real → top-6
+            Voyage AI rerank-2 avalia cada par
+            (pergunta, chunk filho) e seleciona
+            os 6 filhos mais relevantes
+                   │
+                   ▼
+         [ expand_to_parents ]  ← passo chave
+         Para cada filho vencedor, busca o
+         bloco pai correspondente no SQLite.
+         O texto do filho é substituído pelo
+         texto do pai (~1.000 chars).
+         Resultado: 6 blocos com contexto completo
                    │
                    ▼
              [ answer.py ]
-             Monta prompt com os 6 trechos no formato
-             [livro > capítulo] e envia para o LLM.
+             Monta prompt com os 6 blocos pai no
+             formato [livro > capítulo].
              LLM cita fonte e declara insuficiência
              quando evidência não sustenta a resposta.
                    │
                    ▼
         Resposta com citações [livro > capítulo]
 ```
+
+### Por que Parent-Child Chunking?
+
+Um chunk único precisa fazer dois trabalhos opostos ao mesmo tempo:
+
+- **Busca precisa** → chunk pequeno é melhor. O embedding de 250 tokens representa um conceito focado. Com 1.000 tokens, o vetor dilui o sinal e a busca fica imprecisa.
+- **Resposta coerente** → chunk grande é melhor. Um parágrafo cortado no meio perde o argumento. O LLM responde com base num fragmento sem começo nem fim.
+
+Parent-child resolve a contradição separando os dois papéis em níveis diferentes:
+
+```
+Capítulo do livro
+│
+├── [PAI] "Jamie chegou a Klipdrift em 1906. A cidade era pequena,
+│         empoeirada, dominada por homens que tinham perdido tudo
+│         nas minas e tentavam recomeçar. Ele conheceu Banda naquele
+│         mesmo dia — um homem que guardava segredos como pedras..."
+│         (≈ 1.000 chars — armazenado no SQLite, não indexado)
+│     │
+│     ├── [FILHO 1] "Jamie chegou a Klipdrift em 1906. A cidade
+│     │             era pequena, empoeirada..." (≈ 250 chars — indexado)
+│     │
+│     ├── [FILHO 2] "...dominada por homens que tinham perdido tudo
+│     │             nas minas e tentavam recomeçar." (≈ 250 chars — indexado)
+│     │
+│     └── [FILHO 3] "Ele conheceu Banda naquele mesmo dia — um homem
+│                   que guardava segredos como pedras..." (≈ 250 chars — indexado)
+```
+
+**Na busca:** o sistema encontra o filho exato que responde à pergunta (embedding preciso, BM25 preciso).
+
+**Na resposta:** o filho é substituído pelo pai antes de ir ao LLM. O modelo recebe o parágrafo completo, com começo, meio e fim — sem ideias cortadas.
+
+| | Sem parent-child | Com parent-child |
+|---|---|---|
+| Unidade indexada | 500 chars | **250 chars** (filho — mais preciso) |
+| Unidade enviada ao LLM | 500 chars | **~1.000 chars** (pai — mais contexto) |
+| Chunk cortado no meio de ideia | Frequente | Raro (pais são blocos coerentes) |
+| Embedding dilui o sinal | Às vezes | Reduzido (filhos são menores e focados) |
 
 ### Por que Hybrid Search?
 
@@ -162,12 +228,13 @@ Baseado na [pesquisa da Anthropic sobre Contextual Retrieval](https://www.anthro
 |---|---|
 | EPUB parsing | `ebooklib` + `beautifulsoup4` |
 | Metadados externos | Google Books API + Open Library API (stdlib `urllib`) |
-| Catálogo de livros | SQLite (local) / Firestore collection `books` (cloud) |
+| Catálogo de livros | SQLite `books` table (local) / Firestore collection `books` (cloud) |
+| Parent chunks | SQLite `parent_chunks` table — blocos pai armazenados por ID |
 | Enriquecimento contextual | Multi-provider: Anthropic, DeepSeek, OpenAI, Gemini, Qwen |
 | Embeddings | Voyage AI `voyage-3.5` |
 | Busca lexical | `rank_bm25` |
 | Reranker | Voyage AI `rerank-2` |
-| Vector Database | `chromadb` (local) ou Google Firestore |
+| Vector Database | `chromadb` (local) — chunks filho indexados |
 | LLM | Multi-provider: Anthropic, DeepSeek, OpenAI, Gemini, Qwen |
 | Interface web | `streamlit` (local e Streamlit Community Cloud) |
 | API REST | `fastapi` + `uvicorn` |
@@ -193,12 +260,12 @@ pergunte-ao-livro/
 │   ├── book_catalog.py           # catálogo de livros: SQLite (local) e Firestore (cloud)
 │   ├── parser.py                 # EPUB → metadados + texto limpo por capítulo
 │   ├── metadata_fetcher.py       # Google Books + Open Library → metadados complementares
-│   ├── chunker.py                # texto → chunks com book_id, overlap e metadata
-│   ├── enricher.py               # chunks → chunks enriquecidos (multi-provider, paralelo)
-│   ├── embedder.py               # chunks → embeddings via Voyage AI (batch)
-│   ├── store.py                  # Chroma: salva, consulta e deleta chunks por livro
+│   ├── chunker.py                # parent-child chunking: pais (~1.000 chars) + filhos (~250 chars)
+│   ├── enricher.py               # chunks filho → chunks enriquecidos (multi-provider, paralelo)
+│   ├── embedder.py               # chunks filho → embeddings via Voyage AI (batch)
+│   ├── store.py                  # Chroma (filhos indexados) + SQLite parent_chunks (pais por ID)
 │   ├── store_firestore.py        # Firestore: salva, consulta e deleta chunks por livro
-│   ├── retriever.py              # hybrid search + rerank (Chroma)
+│   ├── retriever.py              # hybrid search + RRF + rerank + expand_to_parents (Chroma)
 │   ├── retriever_firestore.py    # hybrid search + rerank (Firestore)
 │   └── answer.py                 # prompt + LLM → resposta com citações
 ├── scripts/
@@ -310,7 +377,7 @@ Consulta Google Books e Open Library e atualiza as colunas `metadata_google` e `
 python cli.py remove-book master-of-the-game
 ```
 
-Remove o livro do Chroma e do catálogo SQLite. Outros livros não são afetados.
+Remove o livro do Chroma (chunks filho), da tabela `parent_chunks` (blocos pai) e do catálogo SQLite. Outros livros não são afetados.
 
 **Listar livros ingeridos:**
 
@@ -438,6 +505,8 @@ Resposta:
 - [x] Reranker top-k de 3 → 6 chunks para melhor cobertura de contexto
 - [x] Citação estruturada no prompt: `[livro > capítulo]` com cláusula de abstenção explícita
 - [x] Enriquecimento contextual ativado por padrão (`--no-enrich` para desativar)
+- [x] Parent-child chunking: filhos (~250 chars) indexados para busca precisa, pais (~1.000 chars) armazenados no SQLite para contexto expandido na geração
+- [x] `expand_to_parents`: após reranking, cada chunk filho é substituído pelo bloco pai antes de ir ao LLM
 
 ---
 

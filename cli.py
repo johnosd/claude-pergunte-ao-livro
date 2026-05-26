@@ -1,5 +1,5 @@
 import click
-from src.retriever import retrieve_hybrid, rerank
+from src.retriever import retrieve_hybrid, rerank, expand_to_parents
 from src.answer import answer
 
 
@@ -26,7 +26,8 @@ def ingest(epub_path, no_enrich, provider):
 def ask(query, top_k, model, book):
     chunks = retrieve_hybrid(query, n_results=top_k, book_id=book)
     reranked = rerank(query, chunks)
-    response = answer(query, reranked, model=model)
+    expanded = expand_to_parents(reranked)
+    response = answer(query, expanded, model=model)
     click.echo(response)
 
 @cli.command("fetch-metadata")
