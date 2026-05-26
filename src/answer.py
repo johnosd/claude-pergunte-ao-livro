@@ -1,19 +1,11 @@
-import anthropic
-from dotenv import load_dotenv
+from src.clients import PROVIDERS, get_client, get_provider_for_model
 
-load_dotenv()
-
-# Inicializa o cliente Anthropic
-client = anthropic.Anthropic()
-
-def answer(query: str, chunks: list[dict]) -> str:
-    # Monta o contexto com os chunks rerankeados
+def answer(query: str, chunks: list[dict], model: str = "claude-sonnet-4-20250514") -> str:
     context = "\n\n".join([
         f"[Trecho {i+1} - Capítulo {c['chapter_id']}]:\n{c['text']}"
         for i, c in enumerate(chunks)
     ])
 
-    # Prompt instrui o Claude a usar apenas o contexto fornecido
     prompt = f"""Responda a pergunta abaixo usando APENAS os trechos do livro fornecidos.
 Cite de qual trecho veio cada informação.
 Se a resposta não estiver nos trechos, diga que não encontrou no livro.
@@ -23,10 +15,20 @@ TRECHOS:
 
 PERGUNTA: {query}"""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    provider = get_provider_for_model(model)
+    client = get_client(provider)
 
-    return message.content[0].text
+    if PROVIDERS[provider]["type"] == "anthropic":
+        message = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
+
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content

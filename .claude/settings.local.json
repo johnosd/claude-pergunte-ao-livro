@@ -6,7 +6,9 @@
       "Read(//c/Users/johns/.claude/projects/c--Users-johns-Documents-Projetos-Claude-Code-Pratice-claude-certified-claude-pergunte-ao-livro/memory/**)",
       "Bash(venv\\\\Scripts\\\\pip install *)",
       "Bash(venv\\\\Scripts\\\\python -c \"from rank_bm25 import BM25Okapi; print\\('ok'\\)\")",
-      "Bash(.\\\\venv\\\\Scripts\\\\python.exe -c \"from rank_bm25 import BM25Okapi; print\\('instalado com sucesso'\\)\")"
+      "Bash(.\\\\venv\\\\Scripts\\\\python.exe -c \"from rank_bm25 import BM25Okapi; print\\('instalado com sucesso'\\)\")",
+      "Bash(dir \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\data\" /s /b)",
+      "PowerShell(& \"c:\\\\Users\\\\johns\\\\Documents\\\\Projetos\\\\Claude Code Pratice\\\\claude_certified\\\\claude-pergunte-ao-livro\\\\venv\\\\Scripts\\\\pip.exe\" install streamlit)"
     ]
   }
 }

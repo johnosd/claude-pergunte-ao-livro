@@ -2,13 +2,13 @@
 
 Faça perguntas para qualquer livro EPUB sem carregar o livro inteiro no contexto.
 
-Sistema RAG (Retrieval-Augmented Generation) com enriquecimento contextual multi-provider, busca híbrida (semântica + lexical) e reranking. Responde com citações dos trechos do livro via Claude.
+Sistema RAG (Retrieval-Augmented Generation) com suporte a múltiplos livros, enriquecimento contextual multi-provider, busca híbrida (semântica + lexical) e reranking. Responde com citações dos trechos do livro via LLM de sua escolha.
 
 ---
 
 ## Arquitetura
 
-O sistema tem dois fluxos independentes: **ingestão** (roda uma vez) e **pergunta** (roda sempre).
+O sistema tem dois fluxos independentes: **ingestão** (roda uma vez por livro) e **pergunta** (roda sempre).
 
 ### Fluxo de Ingestão
 
@@ -17,13 +17,24 @@ livro.epub
     │
     ▼
 [ parser.py ]
+Extrai metadados do EPUB (título, autor, ISBN)
+Gera book_id estável: ISBN → slug(title-author)
 Extrai texto limpo de cada capítulo
 (filtra CSS, imagens, páginas em branco)
+    │
+    ▼
+[ book_catalog.py ]
+Verifica se book_id já existe no catálogo
+→ Se sim: avisa e interrompe (sem reprocessar)
+→ Se não: continua o pipeline
+Catálogo local: SQLite (data/books.db)
+Catálogo cloud: Firestore collection "books"
     │
     ▼
 [ chunker.py ]
 Divide cada capítulo em pedaços de 500 chars
 com overlap de 50 chars entre eles
+ID do chunk: {book_id}__{chapter_id}__chunk_{n}
 Ex: 8 capítulos → 1746 chunks
     │
     ▼
@@ -57,14 +68,21 @@ que representa seu significado semântico
     │
     ▼
 [ store.py / Chroma ]  ou  [ store_firestore.py ]
-Salva em disco: id + embedding + texto + capítulo
-Persiste entre sessões — não precisa reprocessar
+Salva: id + embedding + texto + chapter_id + book_id
+Persiste entre sessões — múltiplos livros coexistem
+    │
+    ▼
+[ book_catalog.py ]
+Registra o livro no catálogo com metadados:
+título, autor, ISBN, chunk_count, enriched, ingested_at
 ```
 
 ### Fluxo de Pergunta (Hybrid Search)
 
 ```
-"Quem é Kate Blackwell?"
+"Quem é Kate Blackwell?"  [--book master-of-the-game]
+    │
+    │  (filtra pelo book_id se --book fornecido)
     │
     ├─────────────────────────────────┐
     │                                 │
@@ -91,7 +109,7 @@ no Chroma / Firestore
                    ▼
              [ answer.py ]
              Monta prompt com os 3 trechos
-             e envia para Claude Sonnet
+             e envia para o LLM escolhido
                    │
                    ▼
         Resposta com citações dos trechos
@@ -123,12 +141,14 @@ Baseado na [pesquisa da Anthropic sobre Contextual Retrieval](https://www.anthro
 | Componente | Tecnologia |
 |---|---|
 | EPUB parsing | `ebooklib` + `beautifulsoup4` |
-| Enriquecimento contextual | `anthropic` / `openai` (multi-provider) |
+| Catálogo de livros | SQLite (local) / Firestore collection `books` (cloud) |
+| Enriquecimento contextual | Multi-provider: Anthropic, DeepSeek, OpenAI, Gemini, Qwen |
 | Embeddings | Voyage AI `voyage-3.5` |
 | Busca lexical | `rank_bm25` |
 | Reranker | Voyage AI `rerank-2` |
 | Vector Database | `chromadb` (local) ou Google Firestore |
-| LLM | Anthropic `claude-sonnet-4-20250514` |
+| LLM | Multi-provider: Anthropic, DeepSeek, OpenAI, Gemini, Qwen |
+| Interface web | `streamlit` (local e Streamlit Community Cloud) |
 | API REST | `fastapi` + `uvicorn` |
 | CLI | `click` |
 
@@ -140,21 +160,25 @@ Baseado na [pesquisa da Anthropic sobre Contextual Retrieval](https://www.anthro
 pergunte-ao-livro/
 ├── .env.example
 ├── requirements.txt
-├── cli.py                        # CLI: ingest e ask
-├── api.py                        # API REST: POST /ingest e POST /ask
+├── app.py                        # Interface web Streamlit
+├── cli.py                        # CLI: ingest, ask, books, remove-book
+├── api.py                        # API REST: /ingest, /ask, /books
 ├── data/
 │   ├── books/                    # coloque seus EPUBs aqui
+│   ├── books.db                  # catálogo SQLite (gerado automaticamente)
 │   └── chroma/                   # banco vetorial local (gerado automaticamente)
 ├── src/
-│   ├── parser.py                 # EPUB → texto limpo por capítulo
-│   ├── chunker.py                # texto → chunks com overlap e metadata
+│   ├── clients.py                # fonte única de todos os clientes de API
+│   ├── book_catalog.py           # catálogo de livros: SQLite (local) e Firestore (cloud)
+│   ├── parser.py                 # EPUB → metadados + texto limpo por capítulo
+│   ├── chunker.py                # texto → chunks com book_id, overlap e metadata
 │   ├── enricher.py               # chunks → chunks enriquecidos (multi-provider, paralelo)
 │   ├── embedder.py               # chunks → embeddings via Voyage AI (batch)
-│   ├── store.py                  # Chroma: salva e consulta chunks
-│   ├── store_firestore.py        # Firestore: salva e consulta chunks
+│   ├── store.py                  # Chroma: salva, consulta e deleta chunks por livro
+│   ├── store_firestore.py        # Firestore: salva, consulta e deleta chunks por livro
 │   ├── retriever.py              # hybrid search + rerank (Chroma)
 │   ├── retriever_firestore.py    # hybrid search + rerank (Firestore)
-│   └── answer.py                 # prompt + Claude → resposta com citações
+│   └── answer.py                 # prompt + LLM → resposta com citações
 ├── scripts/
 │   └── ingest.py                 # pipeline completo de ingestão
 └── tests/
@@ -182,7 +206,7 @@ Edite o `.env`:
 ANTHROPIC_API_KEY=sua_chave_aqui
 VOYAGE_API_KEY=sua_chave_aqui
 
-# Providers opcionais para enriquecimento contextual
+# Providers opcionais para enriquecimento contextual e respostas
 OPENAI_API_KEY=sua_chave_aqui
 GEMINI_API_KEY=sua_chave_aqui
 DEEPSEEK_API_KEY=sua_chave_aqui
@@ -196,26 +220,46 @@ GOOGLE_APPLICATION_CREDENTIALS=caminho/para/service-account.json
 
 ## Como usar
 
+### Interface Web (Streamlit)
+
+```bash
+streamlit run app.py
+```
+
+Abre em `http://localhost:8501` com três abas:
+
+| Aba | O que faz |
+|---|---|
+| 💬 **Perguntar** | Campo de pergunta, filtro por livro, seleção de modelo, exibe resposta e trechos usados |
+| 📥 **Ingerir** | Upload de EPUB, opção de enriquecimento com seleção de provider |
+| 📖 **Livros** | Lista livros ingeridos com metadados e botão de remoção |
+
+**Deploy no Streamlit Community Cloud** (gratuito):
+1. Suba o projeto no GitHub
+2. Acesse [share.streamlit.io](https://share.streamlit.io) e conecte o repositório
+3. Configure as variáveis de ambiente (API keys) em **Settings → Secrets**
+4. Aponte o arquivo principal para `app.py`
+
+> Para o deploy cloud, configure o Firestore — o SQLite e o Chroma local não persistem no Streamlit Cloud.
+
+---
+
 ### CLI
 
-**Ingerir o livro:**
+**Ingerir livros:**
 
 ```bash
 # Sem enriquecimento (mais rápido)
-python -m scripts.ingest "data/books/seu-livro.epub" --reset
+python cli.py ingest "data/books/livro-a.epub"
 
-# Com enriquecimento — Anthropic Haiku (padrão, prompt caching)
-python -m scripts.ingest "data/books/seu-livro.epub" --reset --enrich
-
-# Com enriquecimento — DeepSeek (mais barato)
-python -m scripts.ingest "data/books/seu-livro.epub" --reset --enrich --provider=deepseek
-
-# Com enriquecimento — Gemini (mais barato ainda)
-python -m scripts.ingest "data/books/seu-livro.epub" --reset --enrich --provider=gemini
-
-# Ajustar threads (padrão: 5)
-python -m scripts.ingest "data/books/seu-livro.epub" --reset --enrich --threads=3
+# Com enriquecimento — DeepSeek V3 é o padrão (melhor custo-benefício)
+python cli.py ingest "data/books/livro-a.epub" --enrich
+python cli.py ingest "data/books/livro-a.epub" --enrich --provider=anthropic
+python cli.py ingest "data/books/livro-a.epub" --enrich --provider=gemini
 ```
+
+> Se tentar ingerir um livro já ingerido, o sistema avisa e para:
+> `Livro já ingerido. Use 'python cli.py remove-book <book_id>' para removê-lo antes.`
 
 **Comparativo de providers para enriquecimento (1746 chunks):**
 
@@ -227,12 +271,40 @@ python -m scripts.ingest "data/books/seu-livro.epub" --reset --enrich --threads=
 | `qwen` | ~$0.005 | ~4 min |
 | `openai` | ~$0.04 | ~5 min |
 
+**Remover um livro:**
+
+```bash
+python cli.py remove-book master-of-the-game
+```
+
+Remove o livro do Chroma e do catálogo SQLite. Outros livros não são afetados.
+
+**Listar livros ingeridos:**
+
+```bash
+python cli.py books
+```
+
+```
+book_id                                  título                               chunks  enriquecido
+master-of-the-game                       Master of the Game                     1746  sim
+senhor-dos-aneis-jrr-tolkien             O Senhor dos Anéis                     2100  não
+```
+
 **Fazer perguntas:**
 
 ```bash
+# Busca em todos os livros (modelo padrão: Claude Sonnet)
 python cli.py ask "Quem é Kate Blackwell?"
-python cli.py ask "Qual é o tema central do livro?"
-python cli.py ask "O que acontece no início da história?"
+
+# Filtrar por livro específico
+python cli.py ask "Quem é Kate Blackwell?" --book master-of-the-game
+
+# Escolher outro modelo
+python cli.py ask "Quem é Kate Blackwell?" --model deepseek-chat
+
+# Combinando filtros
+python cli.py ask "Quem é Kate?" --book master-of-the-game --model deepseek-chat --top-k 10
 ```
 
 ### API REST
@@ -248,19 +320,42 @@ uvicorn api:app --reload
 ```bash
 # Sem enriquecimento
 curl -X POST http://localhost:8000/ingest \
-  -F "file=@data/books/seu-livro.epub"
+  -F "file=@data/books/livro.epub"
 
-# Com enriquecimento (provider padrão: anthropic)
-curl -X POST "http://localhost:8000/ingest?enrich=true" \
-  -F "file=@data/books/seu-livro.epub"
+# Com enriquecimento
+curl -X POST "http://localhost:8000/ingest?enrich=true&provider=deepseek" \
+  -F "file=@data/books/livro.epub"
+```
+
+Resposta:
+```json
+{
+  "status": "ok",
+  "book_id": "master-of-the-game",
+  "title": "Master of the Game",
+  "chapters": 8,
+  "chunks": 1746
+}
+```
+
+**Listar livros via API:**
+
+```bash
+curl http://localhost:8000/books
 ```
 
 **Fazer perguntas via API:**
 
 ```bash
+# Busca em todos os livros
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"query": "Quem é Kate Blackwell?", "top_k": 5}'
+
+# Filtrar por livro + escolher modelo
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Quem é Kate Blackwell?", "book_id": "master-of-the-game", "model": "deepseek-chat"}'
 ```
 
 Resposta:
@@ -268,8 +363,8 @@ Resposta:
 {
   "answer": "Kate Blackwell é uma filantropa...",
   "sources": [
-    {"chapter_id": "id18", "relevance_score": 0.91},
-    {"chapter_id": "id22", "relevance_score": 0.78}
+    {"chapter_id": "id18", "book_id": "master-of-the-game", "relevance_score": 0.91},
+    {"chapter_id": "id22", "book_id": "master-of-the-game", "relevance_score": 0.78}
   ]
 }
 ```
@@ -288,11 +383,19 @@ Resposta:
 - [x] Busca lexical (BM25)
 - [x] Hybrid Search (semântica + lexical)
 - [x] Reranking com Voyage AI
-- [x] Resposta via Claude com citações
+- [x] Resposta via LLM multi-provider com citações (Claude, DeepSeek, OpenAI, Gemini, Qwen)
 - [x] CLI com Click
 - [x] API REST com FastAPI
 - [x] Pipeline de ingestão completo
-- [ ] Migração do vector DB para Google Firestore
+- [x] Migração do vector DB para Google Firestore
+- [x] Centralização de todos os clientes de API em `clients.py`
+- [x] Suporte a múltiplos livros com book_id estável (ISBN → slug)
+- [x] Catálogo de livros: SQLite (local) e Firestore collection (cloud)
+- [x] Detecção de duplicatas — não reprocessa livro já ingerido
+- [x] `--reset` apaga só o livro sendo reingerido, não os outros
+- [x] Filtro por livro em perguntas (`--book` no CLI, `book_id` na API)
+- [x] Interface web com Streamlit (ingerir, perguntar, listar e remover livros)
+- [x] Deploy no Streamlit Community Cloud
 
 ---
 
