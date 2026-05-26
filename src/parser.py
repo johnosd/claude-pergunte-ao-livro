@@ -46,6 +46,8 @@ def parse_epub(file_path: str) -> tuple[dict, list[dict]]:
             text = soup.get_text().strip()
             if len(text) < 100:
                 continue
-            chapters.append({"id": item.get_id(), "text": text})
+            heading = soup.find(["h1", "h2", "h3", "h4"])
+            chapter_title = heading.get_text(strip=True) if heading else item.get_id()
+            chapters.append({"id": item.get_id(), "title": chapter_title, "text": text})
 
     return book_meta, chapters

@@ -2,19 +2,21 @@ import click
 from src.retriever import retrieve_hybrid, rerank
 from src.answer import answer
 
+
+
 @click.group()
 def cli():
     pass
 
 @cli.command()
 @click.argument("epub_path", type=click.Path(exists=True, dir_okay=False, readable=True))
-@click.option("--enrich", is_flag=True, help="Enriquece chunks com contexto (requer --provider)")
-@click.option("--provider", default="deepseek", show_default=True, help="Provider para enriquecimento: anthropic, deepseek, openai, gemini, qwen")
-def ingest(epub_path, enrich, provider):
+@click.option("--no-enrich", "no_enrich", is_flag=True, help="Desativa enriquecimento contextual (ativado por padrão)")
+@click.option("--provider", default="anthropic", show_default=True, help="Provider para enriquecimento: anthropic, deepseek, openai, gemini, qwen")
+def ingest(epub_path, no_enrich, provider):
     if not epub_path.endswith(".epub"):
         raise click.BadParameter("O arquivo deve ter extensão .epub", param_hint="'EPUB_PATH'")
     from scripts.ingest import ingest_book
-    ingest_book(epub_path, enrich=enrich, provider=provider)
+    ingest_book(epub_path, enrich=not no_enrich, provider=provider)
 
 @cli.command()
 @click.argument("query")
@@ -26,6 +28,33 @@ def ask(query, top_k, model, book):
     reranked = rerank(query, chunks)
     response = answer(query, reranked, model=model)
     click.echo(response)
+
+@cli.command("fetch-metadata")
+@click.argument("book_id")
+def fetch_metadata(book_id):
+    from src.book_catalog import book_exists, list_books as _list_books, update_book_metadata
+    from src.metadata_fetcher import fetch_all_metadata
+
+    if not book_exists(book_id):
+        raise click.ClickException(f"Livro '{book_id}' não encontrado. Use 'python cli.py books' para ver os disponíveis.")
+
+    book = next(b for b in _list_books() if b["book_id"] == book_id)
+    epub_meta = {
+        "id":     book["book_id"],
+        "title":  book["title"],
+        "author": book["author"],
+        "isbn":   book["isbn"],
+    }
+
+    click.echo(f"Buscando metadados para: {book['title']!r}")
+    all_metadata = fetch_all_metadata(epub_meta)
+
+    from src.metadata_fetcher import format_metadata_summary
+    click.echo(format_metadata_summary(all_metadata))
+
+    update_book_metadata(book_id, all_metadata)
+    click.echo(f"Metadados atualizados para '{book_id}'.")
+
 
 @cli.command("remove-book")
 @click.argument("book_id")
