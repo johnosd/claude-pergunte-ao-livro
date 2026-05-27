@@ -92,8 +92,15 @@ def expand_to_parents(chunks: list[dict]) -> list[dict]:
     if not parent_ids:
         return chunks
     parents = get_parents_by_ids(parent_ids)
+    seen: set[str] = set()
+    result = []
     for chunk in chunks:
         pid = chunk.get("parent_id")
-        if pid and pid in parents:
-            chunk["text"] = parents[pid]
-    return chunks
+        if pid:
+            if pid in seen:
+                continue
+            if pid in parents:
+                chunk["text"] = parents[pid]
+            seen.add(pid)
+        result.append(chunk)
+    return result

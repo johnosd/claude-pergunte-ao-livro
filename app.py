@@ -44,8 +44,8 @@ with tab_ask:
             if not chunks:
                 st.warning("Nenhum trecho relevante encontrado.")
             else:
-                reranked = rerank(query, chunks)
-                expanded = expand_to_parents(reranked)
+                expanded = expand_to_parents(chunks)
+                reranked = rerank(query, expanded, top_k=top_k)
                 response = answer(query, expanded, model=model)
                 st.markdown("### Resposta")
                 st.write(response)

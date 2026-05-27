@@ -11,15 +11,16 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
 def chunk_chapters_hierarchical(
     chapters: list[dict],
     book_id: str,
-    child_size: int = 250,
+    child_size: int = 450,
     parent_size: int = 1000,
-    child_overlap: int = 25,
+    child_overlap: int = 50,
+    parent_overlap: int = 100,
 ) -> tuple[list[dict], list[dict]]:
     parents, children = [], []
     for chapter in chapters:
         chapter_id = chapter["id"]
         chapter_title = chapter.get("title", chapter_id)
-        for pi, parent_text in enumerate(chunk_text(chapter["text"], parent_size, overlap=0)):
+        for pi, parent_text in enumerate(chunk_text(chapter["text"], parent_size, overlap=parent_overlap)):
             parent_id = f"{book_id}__{chapter_id}__parent_{pi}"
             parents.append({
                 "id": parent_id,

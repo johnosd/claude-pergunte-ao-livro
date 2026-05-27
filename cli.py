@@ -25,9 +25,9 @@ def ingest(epub_path, no_enrich, provider):
 @click.option("--book", default=None, help="Filtrar por book_id (ex: master-of-the-game)")
 def ask(query, top_k, model, book):
     chunks = retrieve_hybrid(query, n_results=top_k, book_id=book)
-    reranked = rerank(query, chunks)
-    expanded = expand_to_parents(reranked)
-    response = answer(query, expanded, model=model)
+    expanded = expand_to_parents(chunks)
+    reranked = rerank(query, expanded, top_k=top_k)
+    response = answer(query, reranked, model=model)
     click.echo(response)
 
 @cli.command("fetch-metadata")

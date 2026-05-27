@@ -18,7 +18,7 @@ def remove_book(book_id: str):
     print(f"Livro '{book_id}' removido do Chroma e do catálogo.")
 
 
-def ingest_book(file_path: str, reset: bool = False, enrich: bool = True, provider: str = "anthropic", threads: int = 10):
+def ingest_book(file_path: str, reset: bool = False, enrich: bool = True, provider: str = "anthropic", threads: int = 15):
     print(f"Lendo metadados do EPUB: {file_path}")
     book_meta, chapters = parse_epub(file_path)
     book_id = book_meta["id"]

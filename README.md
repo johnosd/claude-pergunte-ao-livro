@@ -48,13 +48,13 @@ Catálogo cloud: Firestore collection "books"
 [ chunker.py ]  ← estratégia parent-child
 Divide cada capítulo em dois níveis hierárquicos:
 
-  BLOCOS PAI (~1.000 chars, sem overlap)
+  BLOCOS PAI (~1.000 chars, overlap de 100 chars)
   Cada bloco pai cobre um trecho coerente do capítulo.
   São armazenados no SQLite para recuperação posterior.
   NÃO são indexados para busca — existem só para fornecer
   contexto expandido ao LLM na hora de gerar a resposta.
 
-  CHUNKS FILHO (~250 chars, overlap de 25 chars)
+  CHUNKS FILHO (~450 chars, overlap de 50 chars)
   Cada filho é uma fatia do seu pai.
   São os únicos indexados (embedding + BM25).
   Carregam parent_id para que o pai possa ser recuperado.
@@ -63,26 +63,28 @@ Divide cada capítulo em dois níveis hierárquicos:
   {book_id}__{chapter_id}__parent_{n}
   {book_id}__{chapter_id}__parent_{n}__child_{m}
 
-  Ex: 8 capítulos → ~140 pais → ~560 filhos
+  Ex: 8 capítulos → ~140 pais → ~280 filhos
     │
     ├── filhos → [ enricher.py / embedder.py / Chroma ]
     └── pais  → [ store.py / SQLite ]
     │
     ▼
 [ enricher.py ]  ← ativo por padrão (desativar com --no-enrich)
-Para cada chunk filho, envia o capítulo inteiro + chunk
-para um LLM e gera 1-2 frases de contexto.
-O contexto é prefixado ao chunk antes do embedding.
+Para cada batch de até 10 chunks filho, envia o capítulo
+inteiro + os chunks para um LLM e gera 1-2 frases de contexto
+para cada um. O contexto é prefixado ao chunk antes do embedding.
+
+Batching reduz o número de chamadas de API em ~10×:
+  1.500 chunks → ~150 chamadas (era 1.500)
 
 Suporta múltiplos providers (--provider=...):
   anthropic → Claude Haiku + prompt caching (-90% custo)
   openai    → GPT-4o mini
   gemini    → Gemini 2.0 Flash Lite
-  deepseek  → DeepSeek V3
+  deepseek  → DeepSeek V3 + prefix cache automático
   qwen      → Qwen 2.5 7B
 
-Processamento paralelo (--threads=5) reduz
-o tempo de ~30min para ~6min.
+15 threads paralelas + batching reduz o tempo de ~30min para ~1min.
 
   Antes: "ele não pôde se perdoar"
   Depois: "Este trecho descreve Jamie McGregor no
@@ -138,22 +140,24 @@ mais próximos no Chroma       (top-50)
          ordenados por relevância combinada
                    │
                    ▼
-            [ reranker ]
-            Voyage AI rerank-2 avalia cada par
-            (pergunta, chunk filho) e seleciona
-            os 6 filhos mais relevantes
+         [ expand_to_parents ]  ← passo chave
+         Para cada filho candidato, busca o bloco
+         pai correspondente no SQLite e substitui
+         o texto do filho pelo texto do pai (~1.000 chars).
+         Filhos do mesmo pai são deduplicados —
+         apenas o de maior ranking é mantido.
                    │
                    ▼
-         [ expand_to_parents ]  ← passo chave
-         Para cada filho vencedor, busca o
-         bloco pai correspondente no SQLite.
-         O texto do filho é substituído pelo
-         texto do pai (~1.000 chars).
-         Resultado: 6 blocos com contexto completo
+            [ reranker ]
+            Voyage AI rerank-2 avalia cada par
+            (pergunta, bloco pai completo) e seleciona
+            os top-k blocos mais relevantes.
+            Reranking sobre o pai — não o fragmento filho —
+            resulta em scores de relevância mais precisos.
                    │
                    ▼
              [ answer.py ]
-             Monta prompt com os 6 blocos pai no
+             Monta prompt com os top-k blocos pai no
              formato [livro > capítulo].
              LLM cita fonte e declara insuficiência
              quando evidência não sustenta a resposta.
@@ -166,7 +170,7 @@ mais próximos no Chroma       (top-50)
 
 Um chunk único precisa fazer dois trabalhos opostos ao mesmo tempo:
 
-- **Busca precisa** → chunk pequeno é melhor. O embedding de 250 tokens representa um conceito focado. Com 1.000 tokens, o vetor dilui o sinal e a busca fica imprecisa.
+- **Busca precisa** → chunk pequeno é melhor. O embedding de ~450 chars representa um conceito focado. Com 1.000 chars, o vetor dilui o sinal e a busca fica imprecisa.
 - **Resposta coerente** → chunk grande é melhor. Um parágrafo cortado no meio perde o argumento. O LLM responde com base num fragmento sem começo nem fim.
 
 Parent-child resolve a contradição separando os dois papéis em níveis diferentes:
@@ -180,26 +184,30 @@ Capítulo do livro
 │         mesmo dia — um homem que guardava segredos como pedras..."
 │         (≈ 1.000 chars — armazenado no SQLite, não indexado)
 │     │
-│     ├── [FILHO 1] "Jamie chegou a Klipdrift em 1906. A cidade
-│     │             era pequena, empoeirada..." (≈ 250 chars — indexado)
+│     ├── [FILHO 1] "Jamie chegou a Klipdrift em 1906. A cidade era
+│     │             pequena, empoeirada, dominada por homens..."
+│     │             (≈ 450 chars — indexado)
 │     │
-│     ├── [FILHO 2] "...dominada por homens que tinham perdido tudo
-│     │             nas minas e tentavam recomeçar." (≈ 250 chars — indexado)
-│     │
-│     └── [FILHO 3] "Ele conheceu Banda naquele mesmo dia — um homem
-│                   que guardava segredos como pedras..." (≈ 250 chars — indexado)
+│     └── [FILHO 2] "...tentavam recomeçar. Ele conheceu Banda naquele
+│                   mesmo dia — um homem que guardava segredos..."
+│                   (≈ 450 chars — indexado)
 ```
 
 **Na busca:** o sistema encontra o filho exato que responde à pergunta (embedding preciso, BM25 preciso).
 
-**Na resposta:** o filho é substituído pelo pai antes de ir ao LLM. O modelo recebe o parágrafo completo, com começo, meio e fim — sem ideias cortadas.
+**Antes do reranking:** o filho é substituído pelo pai (expand_to_parents). Filhos do mesmo pai são deduplicados — evita contexto repetido no LLM.
+
+**No reranking:** o reranker avalia a relevância do bloco pai completo (~1.000 chars), não do fragmento filho. Scores mais precisos, seleção melhor.
+
+**Na resposta:** o LLM recebe os top-k blocos pai com começo, meio e fim — sem ideias cortadas.
 
 | | Sem parent-child | Com parent-child |
 |---|---|---|
-| Unidade indexada | 500 chars | **250 chars** (filho — mais preciso) |
+| Unidade indexada | 500 chars | **~450 chars** (filho — mais preciso) |
 | Unidade enviada ao LLM | 500 chars | **~1.000 chars** (pai — mais contexto) |
-| Chunk cortado no meio de ideia | Frequente | Raro (pais são blocos coerentes) |
-| Embedding dilui o sinal | Às vezes | Reduzido (filhos são menores e focados) |
+| Unidade avaliada pelo reranker | 500 chars | **~1.000 chars** (pai — scores mais precisos) |
+| Chunk cortado no meio de ideia | Frequente | Raro (pais têm overlap de 100 chars) |
+| Contexto duplicado no LLM | Possível | Eliminado (deduplicação por parent_id) |
 
 ### Por que Hybrid Search?
 
@@ -353,15 +361,17 @@ python cli.py ingest "data/books/livro-a.epub" --no-enrich
 > Se tentar ingerir um livro já ingerido, o sistema avisa e para:
 > `Livro já ingerido. Use 'python cli.py remove-book <book_id>' para removê-lo antes.`
 
-**Comparativo de providers para enriquecimento (1746 chunks):**
+**Comparativo de providers para enriquecimento (1.500 chunks, batch de 10, 15 threads):**
 
-| Provider | Custo estimado | Tempo (~5 threads) |
+| Provider | Custo estimado | Tempo |
 |---|---|---|
-| `anthropic` | ~$0.05 (com cache) | ~6 min |
-| `gemini` | ~$0.01 | ~4 min |
-| `deepseek` | ~$0.02 | ~5 min |
-| `qwen` | ~$0.005 | ~4 min |
-| `openai` | ~$0.04 | ~5 min |
+| `anthropic` | ~$0.005 (com cache) | ~1 min |
+| `gemini` | ~$0.001 | ~1 min |
+| `deepseek` | ~$0.002 (cache automático) | ~1 min |
+| `qwen` | ~$0.001 | ~1 min |
+| `openai` | ~$0.004 | ~1 min |
+
+> O batching (10 chunks/chamada) reduz o número de requisições em ~10× em relação à versão anterior.
 
 **Buscar metadados externos para um livro já ingerido:**
 
@@ -505,8 +515,11 @@ Resposta:
 - [x] Reranker top-k de 3 → 6 chunks para melhor cobertura de contexto
 - [x] Citação estruturada no prompt: `[livro > capítulo]` com cláusula de abstenção explícita
 - [x] Enriquecimento contextual ativado por padrão (`--no-enrich` para desativar)
-- [x] Parent-child chunking: filhos (~250 chars) indexados para busca precisa, pais (~1.000 chars) armazenados no SQLite para contexto expandido na geração
-- [x] `expand_to_parents`: após reranking, cada chunk filho é substituído pelo bloco pai antes de ir ao LLM
+- [x] Parent-child chunking: filhos (~450 chars) indexados para busca precisa, pais (~1.000 chars, overlap 100) armazenados no SQLite para contexto expandido na geração
+- [x] `expand_to_parents` antes do reranking: reranker avalia o bloco pai completo, não o fragmento filho — scores mais precisos
+- [x] Deduplicação de parents em `expand_to_parents`: filhos do mesmo pai colapsam em um único bloco — sem contexto repetido no LLM
+- [x] Slider "Chunks recuperados" ligado ao `top_k` do reranker — controle real sobre o contexto enviado ao LLM
+- [x] Batching no enricher (10 chunks/chamada, 15 threads): ~10× menos chamadas de API, tempo de ~30min para ~1min
 
 ---
 
