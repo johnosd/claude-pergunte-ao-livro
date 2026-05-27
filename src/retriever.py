@@ -1,4 +1,4 @@
-from src.store import get_collection
+from src.store import get_collection, get_parents_by_ids
 from src.clients import voyage_client
 from rank_bm25 import BM25Okapi
 
@@ -37,6 +37,7 @@ def retrieve(query: str, n_results: int = 5, book_id: str | None = None) -> list
             "chapter_id": results["metadatas"][0][i]["chapter_id"],
             "chapter_title": results["metadatas"][0][i].get("chapter_title", results["metadatas"][0][i]["chapter_id"]),
             "book_id": results["metadatas"][0][i].get("book_id"),
+            "parent_id": results["metadatas"][0][i].get("parent_id"),
             "distance": results["distances"][0][i],
         }
         for i, doc in enumerate(results["documents"][0])
@@ -61,6 +62,7 @@ def retrieve_lexical(query: str, n_results: int = 10, book_id: str | None = None
             "chapter_id": all_docs["metadatas"][idx]["chapter_id"],
             "chapter_title": all_docs["metadatas"][idx].get("chapter_title", all_docs["metadatas"][idx]["chapter_id"]),
             "book_id": all_docs["metadatas"][idx].get("book_id"),
+            "parent_id": all_docs["metadatas"][idx].get("parent_id"),
             "bm25_score": float(scores[idx]),
         }
         for idx in top_indices
@@ -83,3 +85,22 @@ def rerank(query: str, chunks: list[dict], top_k: int = 6) -> list[dict]:
         chunk["relevance_score"] = item.relevance_score
         reranked.append(chunk)
     return reranked
+
+
+def expand_to_parents(chunks: list[dict]) -> list[dict]:
+    parent_ids = [c["parent_id"] for c in chunks if c.get("parent_id")]
+    if not parent_ids:
+        return chunks
+    parents = get_parents_by_ids(parent_ids)
+    seen: set[str] = set()
+    result = []
+    for chunk in chunks:
+        pid = chunk.get("parent_id")
+        if pid:
+            if pid in seen:
+                continue
+            if pid in parents:
+                chunk["text"] = parents[pid]
+            seen.add(pid)
+        result.append(chunk)
+    return result

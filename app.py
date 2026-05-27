@@ -12,7 +12,7 @@ tab_ask, tab_ingest, tab_books = st.tabs(["💬 Perguntar", "📥 Ingerir", "�
 
 with tab_ask:
     from src.book_catalog import list_books
-    from src.retriever import retrieve_hybrid, rerank
+    from src.retriever import retrieve_hybrid, rerank, expand_to_parents
     from src.answer import answer
     from src.clients import PROVIDERS
 
@@ -44,12 +44,13 @@ with tab_ask:
             if not chunks:
                 st.warning("Nenhum trecho relevante encontrado.")
             else:
-                reranked = rerank(query, chunks)
-                response = answer(query, reranked, model=model)
+                expanded = expand_to_parents(chunks)
+                reranked = rerank(query, expanded, top_k=top_k)
+                response = answer(query, expanded, model=model)
                 st.markdown("### Resposta")
                 st.write(response)
                 with st.expander("Trechos utilizados"):
-                    for i, c in enumerate(reranked):
+                    for i, c in enumerate(expanded):
                         st.markdown(f"**Trecho {i+1}** — capítulo `{c['chapter_id']}` | score `{c.get('relevance_score', 0):.2f}`")
                         parts = c["text"].split("\n\n", 1)
                         if len(parts) == 2:

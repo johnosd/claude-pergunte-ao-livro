@@ -12,7 +12,7 @@ def embed_chunks(chunks: list[dict], batch_size: int = 128) -> list[dict]:
             chunks[i + j]["embedding"] = embedding
 
         if i + batch_size < len(texts):
-            print(f"  Batch {i // batch_size + 1} concluído. Aguardando 20s...")
-            time.sleep(20)
+            print(f"  Batch {i // batch_size + 1} concluído. Aguardando 2s...")
+            time.sleep(2)
 
     return chunks
